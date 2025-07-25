@@ -8,7 +8,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             .then(json => {
                 // 응답 구조가 { grass: [ { date, value }, … ] }
                 const grassArr = Array.isArray(json.grass) ? json.grass : [];
-                const today = new Date().toISOString().slice(0, 10);
+                const today = getSolvedAcDate();
                 const todayEntry = grassArr.find(entry => entry.date === today);
                 // value 필드에서 오늘 푼 개수를 꺼내고, 없으면 0
                 sendResponse({ count: todayEntry ? todayEntry.value : 0 });
@@ -22,3 +22,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return true;
     }
 });
+
+function getSolvedAcDate() {
+    const now = new Date();            // 로컬 타임(Asia/Seoul)
+    if (now.getHours() < 6) {
+        now.setDate(now.getDate() - 1);
+    }
+    // YYYY-MM-DD 포맷 (en-CA 로 간단하게)
+    return now.toLocaleDateString("en-CA");
+}
