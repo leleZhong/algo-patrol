@@ -3,37 +3,19 @@
 
 <head>
     <meta charset="UTF-8" />
-    <style>
-        body {
-            font-family: sans-serif;
-            padding: 10px;
-            width: 200px;
-        }
-
-        #dateInfo {
-            font-size: 0.9em;
-            color: #555;
-            margin-bottom: 8px;
-        }
-
-        input {
-            width: 140px;
-        }
-
-        li {
-            margin-bottom: 6px;
-        }
-    </style>
+    <link rel="stylesheet" href="popup.css">
 </head>
 
 <body>
     <h3>알고단속기</h3>
 
+    <div class="input-group">
+        <input id="idInput" placeholder="solved.ac ID" />
+        <button id="addBtn">추가</button>
+    </div>
+
     <div id="dateInfo">기준일: --</div>
     <ul id="resultList"></ul>
-
-    <input id="idInput" placeholder="solved.ac ID" />
-    <button id="addBtn">추가</button>
 
     <script src="popup.js"></script>
 </body>
