@@ -1,0 +1,21 @@
+{
+    "manifest_version": 3,
+    "name": "AlgoPatrol",
+    "version": "1.0",
+    "description": "Check if the users you are tracking have solved any problems today.",
+    "permissions": [
+        "storage"
+    ],
+    "host_permissions": [
+        "https://solved.ac/api/v3/*"
+    ],
+    "action": {
+        "default_popup": "popup.html"
+    },
+    "background": {
+        "service_worker": "background.js"
+    },
+    "icons": {
+        "128": "icon.png"
+    }
+}
