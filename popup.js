@@ -39,14 +39,6 @@ function getSolvedAcDate() {
     if (now.getHours() < 6) now.setDate(now.getDate() - 1);
     return now.toLocaleDateString("en-CA"); // "YYYY-MM-DD"
 }
-function diffDays(a, b) {
-    // a,b: "YYYY-MM-DD"
-    const da = new Date(a),
-        db = new Date(b);
-    da.setHours(0, 0, 0, 0);
-    db.setHours(0, 0, 0, 0);
-    return Math.round((da - db) / (1000 * 60 * 60 * 24));
-}
 
 /* ──────────────── 상단 기준일 표시 ──────────────── */
 function showDateInfo() {
@@ -189,56 +181,16 @@ function updateUI() {
                         if (!me) return;
 
                         me.todayCount = res.count;
-
-                        if (res.count > 0) {
-                            me.reverseStreak = 0;
-                            me.lastSolvedDate = today;
-                        } else {
-                            // 오늘 0개면 background가 계산한 reverseStreak가 있으면 우선 사용
-                            if (
-                                typeof res.reverseStreak === "number" &&
-                                res.reverseStreak >= 1
-                            ) {
-                                me.reverseStreak = res.reverseStreak;
-                            } else {
-                                // (백업) 마지막 체크일 기준 증가
-                                if (
-                                    me.lastCheckedDate &&
-                                    me.lastCheckedDate !== today
-                                ) {
-                                    const delta = diffDays(
-                                        today,
-                                        me.lastCheckedDate
-                                    );
-                                    if (delta > 0) me.reverseStreak += delta;
-                                } else if (!me.lastCheckedDate) {
-                                    me.reverseStreak = Math.max(
-                                        me.reverseStreak || 0,
-                                        1
-                                    );
-                                }
-                            }
-                            // 더 최신의 lastSolvedDate가 오면 갱신
-                            if (
-                                res.lastSolvedDate &&
-                                (!me.lastSolvedDate ||
-                                    res.lastSolvedDate > me.lastSolvedDate)
-                            ) {
-                                me.lastSolvedDate = res.lastSolvedDate;
-                            }
-                        }
-
-                        me.lastCheckedDate = today;
+                        me.lastSolvedDate = res.lastSolvedDate || null;
+                        me.reverseStreak =
+                            res.count > 0
+                                ? 0
+                                : Math.max(1, Number(res.reverseStreak) || 1);
+                        me.lastCheckedDate = today; // 기록용(정렬/표시에 직접 사용하지 않음)
 
                         chrome.storage.local.set({ users: arr }, () => {
-                            console.log("[POPUP] show", u.handle, {
-                                count: res.count,
-                                rs: me.reverseStreak,
-                                lastSolvedDate: me.lastSolvedDate,
-                            });
-
-                            // 표시 규칙: 0개일 때 reverseStreak===1 → 단속대상!!!, ≥2 → 리버스스트릭 N일째
                             const label = displayNameOf(me);
+
                             // 표시 문자열 + 뱃지 클래스 결정
                             let rightText, badgeClass;
                             if (res.count > 0) {
@@ -290,30 +242,15 @@ btn.onclick = () => {
         chrome.runtime.sendMessage({ type: "FETCH_GRASS", handle }, (res) => {
             const today = res?.today || getSolvedAcDate();
 
-            let reverseStreak = 0;
-            let lastSolvedDate = res.lastSolvedDate || null;
-
-            if (res.count === 0) {
-                if (
-                    typeof res.reverseStreak === "number" &&
-                    res.reverseStreak >= 1
-                ) {
-                    reverseStreak = res.reverseStreak; // background 계산 사용
-                } else if (lastSolvedDate) {
-                    reverseStreak = Math.max(
-                        1,
-                        diffDays(today, lastSolvedDate)
-                    );
-                } else {
-                    reverseStreak = 1; // 한 번도 안 풀었고 오늘도 0
-                }
-            }
+            const reverseStreak =
+                res.count > 0 ? 0 : Math.max(1, Number(res.reverseStreak) || 1);
+            const lastSolvedDate = res.lastSolvedDate || null;
 
             users.push({
                 handle,
                 alias,
                 reverseStreak,
-                lastSolvedDate, // null일 수도 있음
+                lastSolvedDate,
                 lastCheckedDate: today,
                 todayCount: res.count || 0,
             });
