@@ -18,8 +18,8 @@
 
 body {
     font-family: "Malgun Gothic", "¸¼Àº °íµñ", sans-serif;
-    padding: 16px;
-    width: 280px;
+    padding: 10px;
+    width: 300px;
     background-color: var(--background-color);
     color: var(--text-color);
     box-sizing: border-box;

@@ -99,6 +99,21 @@ function sortUsers(users) {
     });
 }
 
+// HTML 이스케이프 (alias/handle 안전하게 출력)
+function esc(s) {
+    return String(s).replace(
+        /[&<>"']/g,
+        (m) =>
+            ({
+                "&": "&amp;",
+                "<": "&lt;",
+                ">": "&gt;",
+                '"': "&quot;",
+                "'": "&#39;",
+            }[m])
+    );
+}
+
 function updateUI() {
     chrome.storage.local.get({ users: [] }, ({ users }) => {
         users = normalizeUsers(users);
@@ -221,19 +236,28 @@ function updateUI() {
                                 rs: me.reverseStreak,
                                 lastSolvedDate: me.lastSolvedDate,
                             });
-                            
+
                             // 표시 규칙: 0개일 때 reverseStreak===1 → 단속대상!!!, ≥2 → 리버스스트릭 N일째
                             const label = displayNameOf(me);
-                            let rightText;
+                            // 표시 문자열 + 뱃지 클래스 결정
+                            let rightText, badgeClass;
                             if (res.count > 0) {
                                 rightText = `${res.count}문제`;
+                                badgeClass = "badge-ok"; // 초록
+                            } else if (me.reverseStreak >= 2) {
+                                rightText = `리버스스트릭 ${me.reverseStreak}일째`;
+                                badgeClass = "badge-info"; // 파랑
                             } else {
-                                rightText =
-                                    me.reverseStreak >= 2
-                                        ? `리버스스트릭 ${me.reverseStreak}일째`
-                                        : `단속대상!!!`;
+                                rightText = `단속대상!!!`;
+                                badgeClass = "badge-danger"; // 빨강
                             }
-                            span.textContent = `${label}: ${rightText}`;
+
+                            // 뱃지 적용 (innerHTML 사용, 사용자 입력은 esc()로 안전 처리)
+                            span.innerHTML = `${esc(
+                                label
+                            )}: <span class="badge ${badgeClass}">${esc(
+                                rightText
+                            )}</span>`;
                         });
                     });
                 }
