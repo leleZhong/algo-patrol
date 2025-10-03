@@ -1,6 +1,6 @@
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.type === "FETCH_GRASS" && message.handle) {
-        const url = `https://solved.ac/api/v3/user/grass?handle=${message.handle}&topic=default`;
+        const url = `https://solved.ac/api/v3/user/grass?handle=${message.handle}&topic=today-solved`;
 
         fetch(url, { cache: "no-store" })
             .then((r) => r.json())
