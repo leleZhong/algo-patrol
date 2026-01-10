@@ -5,23 +5,55 @@ const list = document.getElementById("resultList");
 const dateInfo = document.getElementById("dateInfo");
 
 /* ───────────────── 유틸: storage Promise 래퍼 ───────────────── */
-function getUsers() {
+// sync와 local을 모두 확인하여 데이터 유실 방지
+async function getUsers() {
     return new Promise((resolve) => {
-        chrome.storage.local.get({ users: [] }, ({ users }) => resolve(users));
-    });
-}
-function setUsers(users) {
-    return new Promise((resolve) => {
-        chrome.storage.local.set({ users }, resolve);
+        // 1. 먼저 sync 데이터 가져옴
+        chrome.storage.sync.get({ users: [] }, (syncRes) => {
+            if (syncRes.users && syncRes.users.length > 0) {
+                resolve(syncRes.users);
+            } else {
+                // 2. sync가 비어있다면 기기 변경 직후이거나 첫 설치일 수 있으므로 local 확인
+                chrome.storage.local.get({ users: [] }, (localRes) => {
+                    resolve(localRes.users);
+                });
+            }
+        });
     });
 }
 
-/* ──────────────── 스키마 마이그레이션: ["jae"] -> [{handle,...}] ──────────────── */
-async function migrateUsersIfNeeded() {
-    const users = await getUsers();
-    if (!users.length) return;
-    if (typeof users[0] === "string") {
-        const migrated = users.map((h) => ({
+async function setUsers(users) {
+    // 빈 배열이나 잘못된 데이터로 덮어쓰는 것을 방지하기 위한 안전장치
+    if (!Array.isArray(users)) return;
+
+    return new Promise((resolve) => {
+        // sync에 저장 (기기 간 동기화)
+        chrome.storage.sync.set({ users }, () => {
+            // local에도 백업으로 저장 (오프라인 및 유실 대비)
+            chrome.storage.local.set({ users }, resolve);
+        });
+    });
+}
+
+/* ──────────────── 데이터 마이그레이션: Local -> Sync 및 스키마 변환 ──────────────── */
+async function migrateToSync() {
+    const localData = await new Promise(r => chrome.storage.local.get({ users: [] }, r));
+    const syncData = await new Promise(r => chrome.storage.sync.get({ users: [] }, r));
+
+    let finalUsers = [];
+
+    // 1. sync에 데이터가 이미 있다면 그것을 우선 사용
+    if (syncData.users && syncData.users.length > 0) {
+        finalUsers = syncData.users;
+    } 
+    // 2. sync는 비었지만 local에 데이터가 있다면 이관 진행
+    else if (localData.users && localData.users.length > 0) {
+        finalUsers = localData.users;
+    }
+
+    // 3. 기존 문자열 배열 형태(["id1", "id2"])라면 객체 형태로 변환 (기존 코드의 로직 유지)
+    if (finalUsers.length > 0 && typeof finalUsers[0] === "string") {
+        finalUsers = finalUsers.map((h) => ({
             handle: h,
             alias: "",
             reverseStreak: 0,
@@ -29,7 +61,11 @@ async function migrateUsersIfNeeded() {
             lastCheckedDate: null,
             todayCount: 0,
         }));
-        await setUsers(migrated);
+    }
+
+    // 4. 결과가 있다면 양쪽 저장소 동기화
+    if (finalUsers.length > 0) {
+        await setUsers(finalUsers);
     }
 }
 
@@ -106,120 +142,98 @@ function esc(s) {
     );
 }
 
-function updateUI() {
-    chrome.storage.local.get({ users: [] }, ({ users }) => {
-        users = normalizeUsers(users);
-        // 저장소에 반영(한 번만)
-        chrome.storage.local.set({ users });
+/* ──────────────── 정렬 문제를 해결한 updateUI 함수 ──────────────── */
+async function updateUI() {
+    let users = await getUsers();
+    users = normalizeUsers(users);
 
-        sortUsers(users);
+    // 1. 로딩 상태 표시
+    list.innerHTML = "<div style='text-align:center; padding:20px; color:#888;'>데이터 갱신 중...</div>";
 
-        list.innerHTML = "";
-        users.forEach((u) => {
-            const li = document.createElement("li");
-            li.className = "user-item";
-
-            // 왼쪽 텍스트
-            const span = document.createElement("span");
-            span.textContent = `${displayNameOf(u)}: 로딩중...`;
-            li.appendChild(span);
-
-            // 오른쪽 버튼 그룹 (✎, ×)
-            const actions = document.createElement("div");
-
-            // ✎ 별명 수정/추가/삭제(빈값)
-            const edit = document.createElement("button");
-            edit.textContent = "✎";
-            edit.className = "edit-btn";
-            edit.title = "별명 추가/수정";
-            edit.onclick = () => {
-                chrome.storage.local.get({ users: [] }, ({ users }) => {
-                    const arr = normalizeUsers(users);
-                    const me = arr.find((x) => x.handle === u.handle);
-                    if (!me) return;
-                    const next = (
-                        prompt("별명 입력(비우면 삭제):", me.alias || "") || ""
-                    ).trim();
-                    me.alias = next; // 빈값이면 삭제 효과
-                    chrome.storage.local.set({ users: arr }, updateUI);
-                });
-            };
-            actions.appendChild(edit);
-
-            // × 삭제
-            const del = document.createElement("button");
-            del.textContent = "×";
-            del.className = "delete-btn";
-            del.title = "삭제";
-            del.onclick = () => {
-                chrome.storage.local.get({ users: [] }, ({ users }) => {
-                    const filtered = normalizeUsers(users).filter(
-                        (x) => x.handle !== u.handle
-                    );
-                    chrome.storage.local.set({ users: filtered }, updateUI);
-                });
-            };
-            actions.appendChild(del);
-
-            li.appendChild(actions);
-            list.appendChild(li);
-
-            // 비동기: 오늘 데이터 → todayCount / reverseStreak 갱신 후 텍스트 업데이트
-            chrome.runtime.sendMessage(
-                { type: "FETCH_GRASS", handle: u.handle },
-                (res) => {
+    // 2. 모든 사용자의 정보를 병렬로 가져오기
+    const updatedUsers = await Promise.all(
+        users.map((u) => {
+            return new Promise((resolve) => {
+                chrome.runtime.sendMessage({ type: "FETCH_GRASS", handle: u.handle }, (res) => {
                     if (!res || typeof res.count !== "number") {
-                        span.textContent = `${displayNameOf(u)}: 에러`;
-                        return;
-                    }
-
-                    const today = res.today || getSolvedAcDate();
-
-                    chrome.storage.local.get({ users: [] }, ({ users }) => {
-                        const arr = normalizeUsers(users);
-                        const me = arr.find((x) => x.handle === u.handle);
-                        if (!me) return;
-
-                        me.todayCount = res.count;
-                        me.lastSolvedDate = res.lastSolvedDate || null;
-                        me.reverseStreak =
-                            res.count > 0
-                                ? 0
-                                : Math.max(1, Number(res.reverseStreak) || 1);
-                        me.lastCheckedDate = today; // 기록용(정렬/표시에 직접 사용하지 않음)
-
-                        chrome.storage.local.set({ users: arr }, () => {
-                            const label = displayNameOf(me);
-
-                            // 표시 문자열 + 뱃지 클래스 결정
-                            let rightText, badgeClass;
-                            if (res.count > 0) {
-                                rightText = `${res.count}문제`;
-                                badgeClass = "badge-ok"; // 초록
-                            } else if (me.reverseStreak >= 2) {
-                                rightText = `리버스스트릭 ${me.reverseStreak}일째`;
-                                badgeClass = "badge-info"; // 파랑
-                            } else {
-                                rightText = `단속대상!!!`;
-                                badgeClass = "badge-danger"; // 빨강
-                            }
-
-                            // 뱃지 적용 (innerHTML 사용, 사용자 입력은 esc()로 안전 처리)
-                            span.innerHTML = `${esc(
-                                label
-                            )}: <span class="badge ${badgeClass}">${esc(
-                                rightText
-                            )}</span>`;
+                        resolve(u); // 에러 시 기존 데이터 유지
+                    } else {
+                        const today = res.today || getSolvedAcDate();
+                        resolve({
+                            ...u,
+                            todayCount: res.count,
+                            lastSolvedDate: res.lastSolvedDate || null,
+                            reverseStreak: res.count > 0 ? 0 : Math.max(1, Number(res.reverseStreak) || 1),
+                            lastCheckedDate: today,
                         });
-                    });
-                }
-            );
-        });
+                    }
+                });
+            });
+        })
+    );
+
+    // 3. 최신 데이터 저장 및 정렬
+    await setUsers(updatedUsers);
+    sortUsers(updatedUsers);
+
+    // 4. 화면 그리기
+    list.innerHTML = "";
+    updatedUsers.forEach((u) => {
+        const li = document.createElement("li");
+        li.className = "user-item";
+
+        // 뱃지 정보 결정
+        let rightText, badgeClass;
+        if (u.todayCount > 0) {
+            rightText = `${u.todayCount}문제`;
+            badgeClass = "badge-ok";
+        } else if (u.reverseStreak >= 2) {
+            rightText = `리버스스트릭 ${u.reverseStreak}일째`;
+            badgeClass = "badge-info";
+        } else {
+            rightText = `단속대상!!!`;
+            badgeClass = "badge-danger";
+        }
+
+        const span = document.createElement("span");
+        span.innerHTML = `${esc(displayNameOf(u))}: <span class="badge ${badgeClass}">${esc(rightText)}</span>`;
+        li.appendChild(span);
+
+        // 버튼 그룹 (✎, ×)
+        const actions = document.createElement("div");
+        
+        const edit = document.createElement("button");
+        edit.textContent = "✎";
+        edit.className = "edit-btn";
+        edit.onclick = async () => {
+            const next = prompt("별명 입력:", u.alias || "");
+            if (next === null || next.trim() === "") {
+                return;
+            }
+
+            u.alias = next.trim();
+            await setUsers(updatedUsers);
+            updateUI();
+        };
+
+        const del = document.createElement("button");
+        del.textContent = "×";
+        del.className = "delete-btn";
+        del.onclick = async () => {
+            const filtered = updatedUsers.filter(x => x.handle !== u.handle);
+            await setUsers(filtered);
+            updateUI();
+        };
+
+        actions.appendChild(edit);
+        actions.appendChild(del);
+        li.appendChild(actions);
+        list.appendChild(li);
     });
 }
 
 /* ──────────────── 사용자 추가 (별명 포함, 없으면 공백) ──────────────── */
-btn.onclick = () => {
+btn.onclick = async () => {
     const handle = input.value.trim();
     const alias = aliasInput ? aliasInput.value.trim() : "";
     if (!handle) {
@@ -231,47 +245,49 @@ btn.onclick = () => {
         aliasInput.value = "";
     }
 
-    chrome.storage.local.get({ users: [] }, ({ users }) => {
-        users = normalizeUsers(users);
-        if (users.some((u) => u.handle === handle)) {
-            updateUI();
-            return;
-        }
+    let users = await getUsers();
+    users = normalizeUsers(users);
 
-        // 등록 직후 solved.ac 조회 → 초기값 계산
-        chrome.runtime.sendMessage({ type: "FETCH_GRASS", handle }, (res) => {
-            const today = res?.today || getSolvedAcDate();
+    // 중복 등록 방지
+    if (users.some((u) => u.handle === handle)) {
+        updateUI();
+        return;
+    }
 
-            const reverseStreak =
-                res.count > 0 ? 0 : Math.max(1, Number(res.reverseStreak) || 1);
-            const lastSolvedDate = res.lastSolvedDate || null;
+    // 등록 직후 solved.ac 조회 → 초기값 계산
+    chrome.runtime.sendMessage({ type: "FETCH_GRASS", handle }, async (res) => {
+        const today = res?.today || getSolvedAcDate();
+        const reverseStreak = res.count > 0 ? 0 : Math.max(1, Number(res.reverseStreak) || 1);
+        const lastSolvedDate = res.lastSolvedDate || null;
 
-            users.push({
-                handle,
-                alias,
-                reverseStreak,
-                lastSolvedDate,
-                lastCheckedDate: today,
-                todayCount: res.count || 0,
-            });
-
-            chrome.storage.local.set({ users }, updateUI);
+        users.push({
+            handle,
+            alias,
+            reverseStreak,
+            lastSolvedDate,
+            lastCheckedDate: today,
+            todayCount: res.count || 0,
         });
+
+        // 3. setUsers()를 사용하여 sync와 local 양쪽에 모두 저장합니다.
+        await setUsers(users);
+        updateUI();
     });
 };
 
-function removeUser(handle) {
-    chrome.storage.local.get({ users: [] }, ({ users }) => {
-        const filtered = normalizeUsers(users).filter(
-            (u) => u.handle !== handle
-        );
-        chrome.storage.local.set({ users: filtered }, updateUI);
-    });
+async function removeUser(handle) {
+    let users = await getUsers();
+    const filtered = normalizeUsers(users).filter(
+        (u) => u.handle !== handle
+    );
+    // 삭제 후 양쪽 저장소 동기화 저장
+    await setUsers(filtered);
+    updateUI();
 }
 
 /* ──────────────── 초기 부트스트랩 ──────────────── */
 document.addEventListener("DOMContentLoaded", async () => {
-    await migrateUsersIfNeeded();
+    await migrateToSync();
     showDateInfo();
     updateUI();
 });
