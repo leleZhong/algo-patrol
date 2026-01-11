@@ -1,8 +1,10 @@
 const input = document.getElementById("idInput");
 const aliasInput = document.getElementById("aliasInput"); // 없으면 null
+const groupInput = document.getElementById("groupInput"); // 없으면 null
 const btn = document.getElementById("addBtn");
 const list = document.getElementById("resultList");
 const dateInfo = document.getElementById("dateInfo");
+const DEFAULT_GROUP_NAME = "기본";
 
 /* ───────────────── 유틸: storage Promise 래퍼 ───────────────── */
 // sync와 local을 모두 확인하여 데이터 유실 방지
@@ -56,6 +58,7 @@ async function migrateToSync() {
         finalUsers = finalUsers.map((h) => ({
             handle: h,
             alias: "",
+            group: DEFAULT_GROUP_NAME,
             reverseStreak: 0,
             lastSolvedDate: null,
             lastCheckedDate: null,
@@ -65,7 +68,7 @@ async function migrateToSync() {
 
     // 4. 결과가 있다면 양쪽 저장소 동기화
     if (finalUsers.length > 0) {
-        await setUsers(finalUsers);
+        await setUsers(normalizeUsers(finalUsers));
     }
 }
 
@@ -81,12 +84,18 @@ function showDateInfo() {
     dateInfo.textContent = `기준일: ${getSolvedAcDate()}`;
 }
 
+function normalizeGroupName(value) {
+    const name = String(value || "").trim();
+    return name ? name : DEFAULT_GROUP_NAME;
+}
+
 function normalizeUsers(users) {
     // 문자열 배열이면 새 스키마로 변환
     if (users.length && typeof users[0] === "string") {
         return users.map((h) => ({
             handle: h,
             alias: "",
+            group: DEFAULT_GROUP_NAME,
             reverseStreak: 0,
             lastSolvedDate: null,
             lastCheckedDate: null,
@@ -94,7 +103,10 @@ function normalizeUsers(users) {
         }));
     }
     // todayCount 필드 보강
-    return users.map((u) => ({ todayCount: 0, ...u }));
+    return users.map((u) => {
+        const group = normalizeGroupName(u.group);
+        return { todayCount: 0, ...u, group };
+    });
 }
 
 function displayNameOf(u) {
@@ -125,6 +137,28 @@ function sortUsers(users) {
         const bName = b.alias || b.handle;
         return aName.localeCompare(bName, "en", { sensitivity: "base" });
     });
+}
+
+function groupUsers(users) {
+    const buckets = new Map();
+    users.forEach((u) => {
+        u.group = normalizeGroupName(u.group);
+        const list = buckets.get(u.group);
+        if (list) {
+            list.push(u);
+        } else {
+            buckets.set(u.group, [u]);
+        }
+    });
+
+    const names = Array.from(buckets.keys()).sort((a, b) => {
+        const aDefault = a === DEFAULT_GROUP_NAME;
+        const bDefault = b === DEFAULT_GROUP_NAME;
+        if (aDefault !== bDefault) return aDefault ? -1 : 1;
+        return a.localeCompare(b, "en", { sensitivity: "base" });
+    });
+
+    return names.map((name) => ({ name, users: buckets.get(name) || [] }));
 }
 
 // HTML 이스케이프 (alias/handle 안전하게 출력)
@@ -172,63 +206,76 @@ async function updateUI() {
         })
     );
 
-    // 3. 최신 데이터 저장 및 정렬
+    // 3. 최신 데이터 저장
     await setUsers(updatedUsers);
-    sortUsers(updatedUsers);
 
-    // 4. 화면 그리기
+    // 4. 화면 그리기 (그룹별 정렬)
     list.innerHTML = "";
-    updatedUsers.forEach((u) => {
-        const li = document.createElement("li");
-        li.className = "user-item";
+    groupUsers(updatedUsers).forEach((group) => {
+        const header = document.createElement("li");
+        header.className = "group-header";
+        header.textContent = `그룹: ${group.name}`;
+        list.appendChild(header);
 
-        // 뱃지 정보 결정
-        let rightText, badgeClass;
-        if (u.todayCount > 0) {
-            rightText = `${u.todayCount}문제`;
-            badgeClass = "badge-ok";
-        } else if (u.reverseStreak >= 2) {
-            rightText = `리버스스트릭 ${u.reverseStreak}일째`;
-            badgeClass = "badge-info";
-        } else {
-            rightText = `단속대상!!!`;
-            badgeClass = "badge-danger";
-        }
+        sortUsers(group.users);
+        group.users.forEach((u) => {
+            const li = document.createElement("li");
+            li.className = "user-item";
 
-        const span = document.createElement("span");
-        span.innerHTML = `${esc(displayNameOf(u))}: <span class="badge ${badgeClass}">${esc(rightText)}</span>`;
-        li.appendChild(span);
-
-        // 버튼 그룹 (✎, ×)
-        const actions = document.createElement("div");
-        
-        const edit = document.createElement("button");
-        edit.textContent = "✎";
-        edit.className = "edit-btn";
-        edit.onclick = async () => {
-            const next = prompt("별명 입력:", u.alias || "");
-            if (next === null || next.trim() === "") {
-                return;
+            // 뱃지 정보 결정
+            let rightText, badgeClass;
+            if (u.todayCount > 0) {
+                rightText = `${u.todayCount}문제`;
+                badgeClass = "badge-ok";
+            } else if (u.reverseStreak >= 2) {
+                rightText = `리버스스트릭 ${u.reverseStreak}일째`;
+                badgeClass = "badge-info";
+            } else {
+                rightText = `단속대상!!!`;
+                badgeClass = "badge-danger";
             }
 
-            u.alias = next.trim();
-            await setUsers(updatedUsers);
-            updateUI();
-        };
+            const span = document.createElement("span");
+            span.innerHTML = `${esc(displayNameOf(u))}: <span class="badge ${badgeClass}">${esc(rightText)}</span>`;
+            li.appendChild(span);
 
-        const del = document.createElement("button");
-        del.textContent = "×";
-        del.className = "delete-btn";
-        del.onclick = async () => {
-            const filtered = updatedUsers.filter(x => x.handle !== u.handle);
-            await setUsers(filtered);
-            updateUI();
-        };
+            // 버튼 그룹 (✎, ×)
+            const actions = document.createElement("div");
 
-        actions.appendChild(edit);
-        actions.appendChild(del);
-        li.appendChild(actions);
-        list.appendChild(li);
+            const edit = document.createElement("button");
+            edit.textContent = "✎";
+            edit.className = "edit-btn";
+            edit.onclick = async () => {
+                const nextAlias = prompt("별명 입력 (비우면 삭제):", u.alias || "");
+                if (nextAlias === null) {
+                    return;
+                }
+
+                const nextGroup = prompt("그룹 입력 (비우면 기본):", u.group || DEFAULT_GROUP_NAME);
+                if (nextGroup === null) {
+                    return;
+                }
+
+                u.alias = nextAlias.trim();
+                u.group = normalizeGroupName(nextGroup);
+                await setUsers(updatedUsers);
+                updateUI();
+            };
+
+            const del = document.createElement("button");
+            del.textContent = "×";
+            del.className = "delete-btn";
+            del.onclick = async () => {
+                const filtered = updatedUsers.filter(x => x.handle !== u.handle);
+                await setUsers(filtered);
+                updateUI();
+            };
+
+            actions.appendChild(edit);
+            actions.appendChild(del);
+            li.appendChild(actions);
+            list.appendChild(li);
+        });
     });
 }
 
@@ -236,6 +283,7 @@ async function updateUI() {
 btn.onclick = async () => {
     const handle = input.value.trim();
     const alias = aliasInput ? aliasInput.value.trim() : "";
+    const group = normalizeGroupName(groupInput ? groupInput.value : "");
     if (!handle) {
         return;
     }
@@ -243,6 +291,9 @@ btn.onclick = async () => {
     input.value = "";
     if (aliasInput) {
         aliasInput.value = "";
+    }
+    if (groupInput) {
+        groupInput.value = "";
     }
 
     let users = await getUsers();
@@ -263,6 +314,7 @@ btn.onclick = async () => {
         users.push({
             handle,
             alias,
+            group,
             reverseStreak,
             lastSolvedDate,
             lastCheckedDate: today,
