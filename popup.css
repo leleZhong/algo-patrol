@@ -36,13 +36,15 @@ h3 {
 
 .input-group {
     display: flex;
+    flex-direction: column;
     gap: 8px;
     margin-bottom: 16px;
 }
 
 /* ── 입력 영역: ID + 별명 입력칸 공통 스타일 ── */
 #idInput,
-#aliasInput {
+#aliasInput,
+#groupInput {
     flex: 1 1 0;
     min-width: 0;
     border: 1px solid var(--border-color);
@@ -53,15 +55,22 @@ h3 {
 }
 
 #aliasInput::placeholder,
-#idInput::placeholder {
+#idInput::placeholder,
+#groupInput::placeholder {
     color: #aaa;
 }
 
 #aliasInput:focus,
-#idInput:focus {
+#idInput:focus,
+#groupInput:focus {
     outline: none;
     border-color: var(--primary-color);
     box-shadow: 0 0 0 3px rgba(0, 123, 255, 0.2);
+}
+
+.input-row {
+    display: flex;
+    gap: 8px;
 }
 
 #addBtn {
@@ -110,6 +119,20 @@ h3 {
     align-items: center;
     gap: 8px;
 }
+
+.group-header {
+    background: transparent;
+    box-shadow: none;
+    border-radius: 0;
+    display: block;
+    padding: 6px 4px;
+    margin: 12px 0 6px;
+    font-size: 0.82em;
+    font-weight: 700;
+    color: var(--secondary-text-color);
+    border-bottom: 1px solid var(--border-color);
+}
+
 
 /* 우측 버튼 그룹(?, ×)을 가로 정렬 */
 #resultList li > div:last-child {
